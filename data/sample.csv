@@ -1,0 +1,5 @@
+FlightNumber,Origin,Destination,Distance,Airline,Delayed
+123,ORD,LAX,1744,United,1
+456,LAX,ORD,1744,United,0
+789,ORD,JFK,740,Delta,0
+101,ATL,ORD,606,American,1

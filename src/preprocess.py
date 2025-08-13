@@ -1,61 +1,77 @@
 import pandas as pd
 
-def preprocess_data(filepath):
+def preprocess_data(filepath: str):
     """
-    Load and preprocess flight data from CSV.
-    - Reads the CSV file
-    - Splts features and target label
-    - One-hot encodes categorical columns
-
-    Parameters:
-    filepath (str): Path to the input CSV file
-
+    Load and preprocess either:
+      (A) sample.csv schema: FlightNumber,Origin,Destination,Distance,Airline,Delayed
+      (B) BTS on-time schema: ... FL_DATE, OP_UNIQUE_CARRIER, ORIGIN, DEST, ARR_DELAY_NEW ...
     Returns:
-    X_encoded (DataFrame): Preprocessed feature matrix
-    y (Series): Target labels (0 or 1 for on-time vs delayed)
+      X_encoded (DataFrame), y (Series)
     """
-    #load the CSV
     df = pd.read_csv(filepath)
 
-    #Ensure correct column names (case-sensitive)
-    #Optional: rename to standardize
+    # ---------- Case A: simple sample.csv ----------
+    if {"Origin", "Destination", "Airline", "Delayed"}.issubset(df.columns):
+        # Minimal features + one-hot for categoricals
+        # Distance is numeric already; encode the categorical fields
+        X = df[["Origin", "Destination", "Airline", "Distance"]].copy()
+        y = df["Delayed"].astype(int)
+        X_encoded = pd.get_dummies(X, columns=["Origin", "Destination", "Airline"])
+        return X_encoded, y
 
-    df = df.rename(columns={
+    # ---------- Case B: BTS on-time schema ----------
+    # Normalize some column names we rely on
+    rename_map = {
         "ORIGIN": "Origin",
         "DEST": "Destination",
-        "OP_UNIQUE_CARRIER": "Airline"
-    })
+        "OP_UNIQUE_CARRIER": "Airline",
+        "DAY_OF_WEEK": "DayOfWeek",
+        "MONTH": "Month",
+    }
+    for old, new in rename_map.items():
+        if old in df.columns and new not in df.columns:
+            df = df.rename(columns={old: new})
 
-    #Create binary label if not already there (optional safety)
+    # Create Delayed label if needed
     if "Delayed" not in df.columns:
-        df["Delayed"] = df["ARR_DELAY_NEW"].fillna(0).apply(lambda x: 1 if x >= 15 else 0)
+        if "ARR_DELAY_NEW" in df.columns:
+            df["Delayed"] = df["ARR_DELAY_NEW"].fillna(0).apply(lambda x: 1 if x >= 15 else 0)
+        elif "ARR_DEL15" in df.columns:
+            df["Delayed"] = df["ARR_DEL15"].fillna(0).astype(int)
+        else:
+            raise ValueError("Cannot find ARR_DELAY_NEW or ARR_DEL15 to derive Delayed label.")
 
-    #Drop missing values in key columns
-    df.dropna(subset=["Origin", "Destination", "Airline"], inplace = True)
+    # Parse date if present (for Month/DayOfWeek if originals missing)
+    if "FL_DATE" in df.columns and pd.api.types.is_string_dtype(df["FL_DATE"]):
+        df["FL_DATE"] = pd.to_datetime(df["FL_DATE"], errors="coerce")
 
-    #select features and lavel
-    X = df[["Origin", "Destination", "Airline", "FL_DATE"]].copy()
-    y = df["Delayed"]
+    if "Month" not in df.columns:
+        if "FL_DATE" in df.columns:
+            df["Month"] = df["FL_DATE"].dt.month
+        elif "MONTH" in df.columns:
+            df["Month"] = df["MONTH"]
+        else:
+            df["Month"] = pd.NA
 
-    #Extract time features
-    X["FL_DATE"] = pd.to_datetime(X["FL_DATE"])
-    X["Month"] = X["FL_DATE"].dt.month
-    X["DayOfWeek"] = X["FL_DATE"].dt.dayofweek
-    X.drop(columns=["FL_DATE"], inplace=True)
+    if "DayOfWeek" not in df.columns:
+        if "FL_DATE" in df.columns:
+            # Monday=0..Sunday=6
+            df["DayOfWeek"] = df["FL_DATE"].dt.dayofweek
+        elif "DAY_OF_WEEK" in df.columns:
+            # BTS uses 1..7; shift to 0..6
+            df["DayOfWeek"] = df["DAY_OF_WEEK"].astype(int) - 1
+        else:
+            df["DayOfWeek"] = pd.NA
 
-    #One hot encode categorical features
-    X_encoded = pd.get_dummies(X, columns=["Origin", "Destination", "Airline"])
+    # Keep only rows with essential fields
+    needed = ["Origin", "Destination", "Airline", "Month", "DayOfWeek", "Delayed"]
+    df = df.dropna(subset=[c for c in needed if c in df.columns])
 
-    return X_encoded, y
+    # Build feature matrix
+    feat_cols = ["Origin", "Destination", "Airline", "Month", "DayOfWeek"]
+    X = df[feat_cols].copy()
+    y = df["Delayed"].astype(int)
 
-
-    
-    
-    # Separate features and labels
-    X = df.drop(columns=["Delayed"])
-    y = df["Delayed"]
-
-    # One-hot encode categorical features
-    X_encoded = pd.get_dummies(X, columns=["Origin", "Destination", "Airline"])
-
+    # One-hot encode categoricals
+    X_encoded = pd.get_dummies(X, columns=["Origin", "Destination", "Airline"], drop_first=False)
     return X_encoded, y
